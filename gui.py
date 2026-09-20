@@ -1248,16 +1248,25 @@ class MLBPredictorApp(tk.Tk):
 
     def _on_fetch_progress_async(self, *args: Any) -> None:
         """Handle thread progress update safely."""
-        msg = args[1] if len(args) > 1 else (args[0] if args else "Loading...")
-        self.after(0, lambda: self.status_var.set(str(msg)))
+        try:
+            msg = args[1] if len(args) > 1 else (args[0] if args else "Loading...")
+            self.after(0, lambda: self.status_var.set(str(msg)))
+        except Exception:
+            pass
 
     def _on_fetch_success_async(self, games: list[dict[str, Any]], is_cached: bool, status_msg: str) -> None:
         """Thread worker success callback dispatched to main GUI thread."""
-        self.after(0, lambda: self._on_fetch_success(games, is_cached, status_msg))
+        try:
+            self.after(0, lambda: self._on_fetch_success(games, is_cached, status_msg))
+        except Exception:
+            pass
 
     def _on_fetch_error_async(self, error_msg: str) -> None:
         """Thread worker error callback dispatched to main GUI thread."""
-        self.after(0, lambda: self._on_fetch_error(error_msg))
+        try:
+            self.after(0, lambda: self._on_fetch_error(error_msg))
+        except Exception:
+            pass
 
     def _on_fetch_error(self, error_msg: str) -> None:
         """Handle fetch failure on main thread."""
