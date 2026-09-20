@@ -37,12 +37,21 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    print("=" * 65)
+    print("   MLB APEX DESKTOP PREDICTOR & BETTING ANALYTICS")
+    print("=" * 65)
+    print("[*] Initializing SQLite database...")
+    sys.stdout.flush()
+
     # 1. Initialize SQLite Database schemas and default model parameters
     conn = init_db(args.db)
     conn.close()
+    print("[*] SQLite database ready.")
 
     # 2. Launch GUI Application
     auto_load = not args.no_auto_load
+    print(f"[*] Starting desktop application (Date: {args.date or 'Today'})...")
+    sys.stdout.flush()
     app = MLBPredictorApp(db_path=args.db, auto_load=auto_load)
 
     if args.date:
@@ -50,6 +59,13 @@ def main() -> None:
         app.date_var.set(args.date)
         if auto_load:
             app.refresh_slate(args.date)
+
+    print("[+] Application window launched successfully!")
+    print("    -> Window title: 'MLB Apex Predictor & Betting Analytics'")
+    print("    -> Look on your taskbar or press Alt+Tab if hidden behind this terminal.")
+    print("    -> Close the application window or press Ctrl+C in this terminal to exit.")
+    print("=" * 65)
+    sys.stdout.flush()
 
     # 3. Enter Tkinter mainloop
     try:

@@ -104,10 +104,24 @@ class MLBPredictorApp(tk.Tk):
         self._build_notebook_tabs()
         self._build_footer()
 
+        # Ensure window is visible, brought to front, and focused
+        self._bring_to_front()
+
         if auto_load:
             self.refresh_slate(self.current_date, force_refresh=False)
         else:
             self.refresh_calibration_tab()
+
+    def _bring_to_front(self) -> None:
+        """Force the application window to the foreground on launch."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(500, lambda: self.attributes("-topmost", False))
+            self.focus_force()
+        except Exception:
+            pass
 
     # =========================================================================
     # Theme & ttk Styles Configuration
