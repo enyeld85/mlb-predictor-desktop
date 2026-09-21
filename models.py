@@ -766,15 +766,15 @@ def compute_calibration_metrics(
                 "count": 0,
                 "avg_predicted_prob": 0.0,
                 "actual_win_pct": 0.0,
-                "status": "Well Calibrated",
+                "status": "Insufficient Data",
             }
             for name, _, _ in bucket_definitions
         ]
         return {
             "total_predictions": 0,
-            "brier_score": 0.0,
-            "log_loss": 0.0,
-            "status": "Well Calibrated",
+            "brier_score": None,
+            "log_loss": None,
+            "status": "Insufficient Data",
             "calibration_buckets": empty_buckets,
         }
 

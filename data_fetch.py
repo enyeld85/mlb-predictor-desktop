@@ -7,13 +7,17 @@ park factors, and bullpen 3-day fatigue modeling.
 
 from __future__ import annotations
 
+import concurrent.futures
 import re
 import sqlite3
 import threading
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import numpy as np
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 
 from database import (
     get_cached_slate,
@@ -21,6 +25,7 @@ from database import (
     get_pitcher,
     get_team,
     init_db,
+    save_pitcher,
     save_slate_cache,
 )
 
@@ -114,6 +119,15 @@ class MLBDataFetcher:
         self.db_path = db_path
         self.timeout = timeout
         self.session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
 
     def _get_db(self, conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
         """Helper to get a valid DB connection."""
@@ -281,7 +295,7 @@ class MLBDataFetcher:
     # =========================================================================
 
     def fetch_pitcher_metrics(self, pitcher_id: int | None) -> dict[str, Any] | None:
-        """Fetch pitcher season statistics and compute in-engine FIP and xFIP.
+        """Fetch pitcher season statistics, game logs, and 1st inning splits.
 
         Never fabricates statistics: returns None if statistics are unavailable.
         """
@@ -289,7 +303,7 @@ class MLBDataFetcher:
             return None
 
         url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}/stats"
-        params = {"stats": "season", "group": "pitching"}
+        params = {"stats": "season,statSplits,gameLog", "group": "pitching", "sitCodes": "i01"}
 
         try:
             resp = self.session.get(url, params=params, timeout=self.timeout)
@@ -302,37 +316,64 @@ class MLBDataFetcher:
         if not stats_arr:
             return None
 
-        splits = []
+        season_stat: dict[str, Any] = {}
+        first_inning_era: float | None = None
+        first_inning_whip: float | None = None
+        game_log_splits: list[dict[str, Any]] = []
+
         for entry in stats_arr:
-            if entry.get("splits"):
-                splits.extend(entry["splits"])
+            disp_name = entry.get("type", {}).get("displayName")
+            if disp_name == "season":
+                splits = entry.get("splits", [])
+                if splits:
+                    season_stat = splits[0].get("stat", {})
+            elif disp_name == "statSplits":
+                for sp in entry.get("splits", []):
+                    split_meta = sp.get("split", {})
+                    # Verified empirically: code 'i01' and description 'First Inning'
+                    if split_meta.get("code") == "i01" or "First Inning" in str(split_meta.get("description", "")):
+                        sp_stat = sp.get("stat", {})
+                        if sp_stat.get("era") is not None:
+                            try:
+                                first_inning_era = float(sp_stat["era"])
+                            except (ValueError, TypeError):
+                                pass
+                        if sp_stat.get("whip") is not None:
+                            try:
+                                first_inning_whip = float(sp_stat["whip"])
+                            except (ValueError, TypeError):
+                                pass
+            elif disp_name == "gameLog":
+                game_log_splits = entry.get("splits", [])
 
-        if not splits:
-            return None
+        # Fallback if season_stat not matched by displayName "season"
+        if not season_stat and stats_arr:
+            splits0 = stats_arr[0].get("splits", [])
+            if splits0:
+                season_stat = splits0[0].get("stat", {})
 
-        stat = splits[0].get("stat", {})
-        if not stat:
+        if not season_stat:
             return None
 
         try:
-            era_val = stat.get("era")
+            era_val = season_stat.get("era")
             if era_val is None:
                 return None
             era = float(era_val)
 
-            whip_val = stat.get("whip")
+            whip_val = season_stat.get("whip")
             whip = float(whip_val) if whip_val is not None else 1.25
 
-            ip_raw = str(stat.get("inningsPitched", "0.0"))
+            ip_raw = str(season_stat.get("inningsPitched", "0.0"))
             ip = float(ip_raw) if ip_raw else 0.0
 
-            k = int(stat.get("strikeOuts", 0))
-            bb = int(stat.get("baseOnBalls", 0))
-            hbp = int(stat.get("hitByPitch", 0))
-            hr = int(stat.get("homeRuns", 0))
-            air_outs = int(stat.get("airOuts", 0))
-            batters_faced = int(stat.get("battersFaced", 0))
-            games_started = int(stat.get("gamesStarted", 0))
+            k = int(season_stat.get("strikeOuts", 0))
+            bb = int(season_stat.get("baseOnBalls", 0))
+            hbp = int(season_stat.get("hitByPitch", 0))
+            hr = int(season_stat.get("homeRuns", 0))
+            air_outs = int(season_stat.get("airOuts", 0))
+            batters_faced = int(season_stat.get("battersFaced", 0))
+            games_started = int(season_stat.get("gamesStarted", 0))
 
             cfip = 3.15
             hr_fb_baseline = 0.115
@@ -347,7 +388,30 @@ class MLBDataFetcher:
 
                 k_pct = round(k / batters_faced, 3) if batters_faced > 0 else round(k / (ip * 4.2), 3)
                 bb_pct = round(bb / batters_faced, 3) if batters_faced > 0 else round(bb / (ip * 4.2), 3)
-                median_ip = round(ip / games_started, 1) if games_started > 0 else round(min(ip, 6.0), 1)
+
+                # Design Spec §4.2: median(last 5 starts IP)
+                start_ips: list[float] = []
+                for g in game_log_splits:
+                    g_stat = g.get("stat", {})
+                    if g_stat.get("gamesStarted", 0) >= 1 or g_stat.get("isStarter", False):
+                        ip_s = str(g_stat.get("inningsPitched", "0.0"))
+                        try:
+                            val = float(ip_s)
+                            w = int(val)
+                            frac = round(val - w, 1)
+                            actual_ip = w + (1.0 / 3.0 if frac == 0.1 else (2.0 / 3.0 if frac == 0.2 else 0.0))
+                            start_ips.append(actual_ip)
+                        except (ValueError, TypeError):
+                            pass
+                    if len(start_ips) >= 5:
+                        break
+
+                if start_ips:
+                    median_ip = round(float(np.median(start_ips)), 1)
+                elif games_started > 0:
+                    median_ip = round(ip / games_started, 1)
+                else:
+                    median_ip = round(min(ip, 6.0), 1)
             else:
                 fip = era
                 xfip = era
@@ -366,8 +430,8 @@ class MLBDataFetcher:
                 "bb_pct": bb_pct,
                 "median_ip": median_ip,
                 "sample_ip": ip,
-                "first_inning_era": None,  # Not fabricated
-                "first_inning_whip": None,
+                "first_inning_era": first_inning_era,
+                "first_inning_whip": first_inning_whip,
             }
         except Exception:
             return None
@@ -633,6 +697,72 @@ class MLBDataFetcher:
 
         return games_out
 
+    def _hydrate_slate_pitchers(self, payload: dict[str, Any], conn: sqlite3.Connection | None = None) -> None:
+        """Pre-fetch starting pitcher metrics with bounded concurrency and persist to SQLite."""
+        if conn is None:
+            return
+
+        dates = payload.get("dates", [])
+        raw_games: list[dict[str, Any]] = []
+        if dates:
+            for d in dates:
+                raw_games.extend(d.get("games", []))
+        elif "games" in payload:
+            raw_games = payload.get("games", [])
+        elif "gamePk" in payload or "game_pk" in payload:
+            raw_games = [payload]
+
+        pitcher_meta: dict[int, dict[str, Any]] = {}
+        for game in raw_games:
+            teams = game.get("teams", {})
+            for side in ("away", "home"):
+                t = teams.get(side, {})
+                sp = t.get("probablePitcher") or t.get("starter")
+                if sp and isinstance(sp, dict):
+                    pid = sp.get("id")
+                    if pid and int(pid) > 0:
+                        pitcher_meta[int(pid)] = {
+                            "name": sp.get("fullName") or sp.get("name", "TBD"),
+                            "team_id": t.get("team", {}).get("id"),
+                            "hand": (
+                                sp.get("hand")
+                                or (sp.get("pitchHand", {}).get("code") if isinstance(sp.get("pitchHand"), dict) else "R")
+                                or "R"
+                            ),
+                        }
+
+        if not pitcher_meta:
+            return
+
+        # Check existing cached records with 12-hour TTL
+        to_fetch_ids: list[int] = []
+        for pid in pitcher_meta:
+            existing = get_pitcher(conn, pid, max_age_hours=12.0)
+            if not existing or existing.get("era") is None or existing.get("median_ip") is None:
+                to_fetch_ids.append(pid)
+
+        if not to_fetch_ids:
+            return
+
+        # Bounded concurrency: max 4 workers to prevent 429 rate limits
+        def _fetch_worker(pid: int) -> tuple[int, dict[str, Any] | None]:
+            return pid, self.fetch_pitcher_metrics(pid)
+
+        workers = min(4, len(to_fetch_ids))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_pid = {executor.submit(_fetch_worker, pid): pid for pid in to_fetch_ids}
+            for fut in concurrent.futures.as_completed(future_to_pid):
+                try:
+                    pid, metrics = fut.result()
+                    if metrics:
+                        meta = pitcher_meta.get(pid, {})
+                        metrics["name"] = meta.get("name", metrics.get("name", "TBD"))
+                        metrics["team_id"] = meta.get("team_id")
+                        metrics["hand"] = meta.get("hand", "R")
+                        save_pitcher(conn, metrics)
+                except Exception:
+                    pass
+
     def fetch_schedule_for_date(
         self,
         date_str: str,
@@ -671,6 +801,9 @@ class MLBDataFetcher:
             resp = self.session.get(url, params=params, timeout=self.timeout)
             resp.raise_for_status()
             payload = resp.json()
+
+            # Pre-hydrate starting pitchers with bounded concurrency and 12-hour TTL
+            self._hydrate_slate_pitchers(payload, conn=conn)
 
             games = self._parse_schedule_payload(payload, date_str, conn=conn)
             if games:

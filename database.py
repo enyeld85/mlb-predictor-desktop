@@ -70,7 +70,8 @@ SCHEMA_STATEMENTS = [
         median_ip REAL,
         first_inning_era REAL,
         first_inning_whip REAL,
-        sample_ip REAL
+        sample_ip REAL,
+        last_updated TEXT
     );
     """,
     """
@@ -147,6 +148,15 @@ def init_db(db_path: str = "mlb_analytics.db") -> sqlite3.Connection:
         cursor = conn.cursor()
         for statement in SCHEMA_STATEMENTS:
             cursor.execute(statement)
+
+        # Defensive migration: Ensure last_updated exists on pitchers table if table was created previously
+        try:
+            cursor.execute("SELECT last_updated FROM pitchers LIMIT 1")
+        except sqlite3.OperationalError:
+            try:
+                cursor.execute("ALTER TABLE pitchers ADD COLUMN last_updated TEXT")
+            except sqlite3.OperationalError:
+                pass
 
         # Seed default constants with INSERT OR IGNORE to protect customized constants
         cursor.executemany(
@@ -415,18 +425,20 @@ def get_team(conn: sqlite3.Connection, team_id: int) -> dict[str, Any] | None:
 
 
 def save_pitcher(conn: sqlite3.Connection, pitcher_data: dict) -> None:
-    """Insert or replace pitcher statistics."""
+    """Insert or replace pitcher statistics with UTC timestamp."""
+    last_updated = pitcher_data.get("last_updated") or datetime.now(timezone.utc).isoformat()
+    pid = pitcher_data.get("pitcher_id") or pitcher_data.get("id")
     with conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT OR REPLACE INTO pitchers (
                 pitcher_id, name, team_id, hand, era, fip, xfip, whip,
-                k_pct, bb_pct, median_ip, first_inning_era, first_inning_whip, sample_ip
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                k_pct, bb_pct, median_ip, first_inning_era, first_inning_whip, sample_ip, last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                pitcher_data.get("pitcher_id"),
+                pid,
                 pitcher_data.get("name"),
                 pitcher_data.get("team_id"),
                 pitcher_data.get("hand"),
@@ -440,19 +452,39 @@ def save_pitcher(conn: sqlite3.Connection, pitcher_data: dict) -> None:
                 pitcher_data.get("first_inning_era"),
                 pitcher_data.get("first_inning_whip"),
                 pitcher_data.get("sample_ip"),
+                last_updated,
             ),
         )
 
 
-def get_pitcher(conn: sqlite3.Connection, pitcher_id: int) -> dict[str, Any] | None:
-    """Retrieve pitcher by pitcher_id."""
+def get_pitcher(
+    conn: sqlite3.Connection,
+    pitcher_id: int,
+    max_age_hours: float | None = 12.0,
+) -> dict[str, Any] | None:
+    """Retrieve pitcher by pitcher_id with optional TTL freshness check."""
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM pitchers WHERE pitcher_id = ?", (pitcher_id,))
     row = cursor.fetchone()
     if not row:
         return None
     cols = [col[0] for col in cursor.description]
-    return dict(zip(cols, row))
+    res = dict(zip(cols, row))
+
+    # TTL freshness validation
+    if max_age_hours is not None and res.get("last_updated"):
+        try:
+            ts_str = str(res["last_updated"]).replace("Z", "+00:00")
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            if (now - ts).total_seconds() > max_age_hours * 3600.0:
+                return None  # Stale, caller should refresh
+        except Exception:
+            pass
+
+    return res
 
 
 def save_park_factor(conn: sqlite3.Connection, park_data: dict) -> None:

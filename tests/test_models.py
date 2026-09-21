@@ -501,7 +501,9 @@ def test_calibration_empty_predictions():
     """Verify graceful handling when predictions list is empty."""
     empty_metrics = models.compute_calibration_metrics([])
     assert empty_metrics["total_predictions"] == 0
-    assert empty_metrics["brier_score"] == 0.0
-    assert empty_metrics["log_loss"] == 0.0
+    assert empty_metrics["brier_score"] is None
+    assert empty_metrics["log_loss"] is None
     assert len(empty_metrics["calibration_buckets"]) == 7
-    assert empty_metrics["status"] == "Well Calibrated"
+    assert empty_metrics["status"] == "Insufficient Data"
+    for b in empty_metrics["calibration_buckets"]:
+        assert b["status"] == "Insufficient Data"

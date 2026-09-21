@@ -233,6 +233,73 @@ def test_pitcher_metrics_computation(data_fetcher, monkeypatch):
     assert pytest.approx(metrics["xfip"], rel=1e-2) == 2.81
 
 
+def test_pitcher_metrics_with_gamelog_and_inning1_splits(data_fetcher, monkeypatch):
+    """Verify combined season, statSplits (i01), and gameLog payload parses rolling median IP and 1st-inning splits."""
+    combined_payload = {
+        "stats": [
+            {
+                "type": {"displayName": "season"},
+                "splits": [
+                    {
+                        "season": "2026",
+                        "stat": {
+                            "gamesStarted": 10,
+                            "era": "2.85",
+                            "inningsPitched": "60.0",
+                            "strikeOuts": 65,
+                            "baseOnBalls": 15,
+                            "hitByPitch": 2,
+                            "homeRuns": 6,
+                            "airOuts": 48,
+                            "groundOuts": 55,
+                            "whip": "1.08",
+                            "battersFaced": 240,
+                        },
+                    }
+                ],
+            },
+            {
+                "type": {"displayName": "statSplits"},
+                "splits": [
+                    {
+                        "split": {"code": "i01", "description": "First Inning"},
+                        "stat": {
+                            "era": "1.80",
+                            "whip": "0.90",
+                        },
+                    }
+                ],
+            },
+            {
+                "type": {"displayName": "gameLog"},
+                "splits": [
+                    {"stat": {"gamesStarted": 1, "inningsPitched": "6.0"}},
+                    {"stat": {"gamesStarted": 1, "inningsPitched": "5.2"}},
+                    {"stat": {"gamesStarted": 1, "inningsPitched": "7.0"}},
+                    {"stat": {"gamesStarted": 1, "inningsPitched": "6.1"}},
+                    {"stat": {"gamesStarted": 1, "inningsPitched": "5.0"}},
+                    {"stat": {"gamesStarted": 0, "inningsPitched": "2.0"}},
+                ],
+            },
+        ]
+    }
+
+    monkeypatch.setattr(
+        data_fetcher.session,
+        "get",
+        lambda *a, **kw: MagicMock(status_code=200, json=lambda: combined_payload, raise_for_status=lambda: None),
+    )
+
+    metrics = data_fetcher.fetch_pitcher_metrics(678394)
+    assert metrics is not None
+    assert metrics["era"] == 2.85
+    assert metrics["whip"] == 1.08
+    assert metrics["sample_ip"] == 60.0
+    assert metrics["first_inning_era"] == 1.80
+    assert metrics["first_inning_whip"] == 0.90
+    assert metrics["median_ip"] == 6.0
+
+
 def test_missing_pitcher_stats_defensive_handling(data_fetcher, monkeypatch):
     """Verify missing pitcher stats return None without raising unhandled exceptions."""
     # 1. Non-existent / empty splits

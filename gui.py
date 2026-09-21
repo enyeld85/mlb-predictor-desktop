@@ -1049,6 +1049,29 @@ class MLBPredictorApp(tk.Tk):
         btn_reset = ttk.Button(btn_row, text="Reset to Defaults", command=self.reset_settings_defaults)
         btn_reset.pack(side=tk.LEFT)
 
+        # Sportsbook Odds Integration Settings
+        lbl_api_sec = tk.Label(
+            left_panel,
+            text="SPORTSBOOK ODDS INTEGRATION",
+            bg=t["bg_card"],
+            fg=t["cyan"],
+            font=("Segoe UI", 10, "bold"),
+        )
+        lbl_api_sec.pack(anchor="w", pady=(18, 4))
+
+        odds_mode_row = tk.Frame(left_panel, bg=t["bg_card"])
+        odds_mode_row.pack(fill=tk.X, pady=2)
+        tk.Label(odds_mode_row, text="Odds Source:", bg=t["bg_card"], fg=t["text_muted"], font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        self.odds_source_var = tk.StringVar(value="Manual / Inline Entry")
+        tk.Label(odds_mode_row, textvariable=self.odds_source_var, bg=t["bg_card"], fg=t["text_main"], font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=6)
+
+        api_key_row = tk.Frame(left_panel, bg=t["bg_card"])
+        api_key_row.pack(fill=tk.X, pady=4)
+        tk.Label(api_key_row, text="The Odds API Key (v1.1):", bg=t["bg_card"], fg=t["text_muted"], font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        self.odds_api_key_var = tk.StringVar(value="")
+        entry_api = ttk.Entry(api_key_row, textvariable=self.odds_api_key_var, width=22)
+        entry_api.pack(side=tk.RIGHT)
+
         # Right Panel: Backtesting Simulator & Output Badges
         right_panel = tk.Frame(container, bg=t["bg_card"], padx=14, pady=12, relief="solid", borderwidth=1)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(6, 0))
@@ -1082,9 +1105,9 @@ class MLBPredictorApp(tk.Tk):
         self.bt_record_var = tk.StringVar(value="0-0 (0.0%)")
         self.bt_units_var = tk.StringVar(value="+0.00u")
         self.bt_roi_var = tk.StringVar(value="0.0%")
-        self.bt_brier_var = tk.StringVar(value="0.0000")
-        self.bt_logloss_var = tk.StringVar(value="0.0000")
-        self.bt_clv_var = tk.StringVar(value="+1.2% CLV")
+        self.bt_brier_var = tk.StringVar(value="N/A")
+        self.bt_logloss_var = tk.StringVar(value="N/A")
+        self.bt_clv_var = tk.StringVar(value="N/A")
 
         self._create_metric_tile(self.bt_metrics_frame, 0, 0, "TOTAL PICKS", self.bt_bets_var, t["text_main"])
         self._create_metric_tile(self.bt_metrics_frame, 0, 1, "RECORD & WIN %", self.bt_record_var, t["cyan"])
@@ -1496,11 +1519,21 @@ class MLBPredictorApp(tk.Tk):
             # Away Row
             a_prob = s.get("away_win_prob", 0.50)
             a_fair = s.get("away_fair_odds", "-110")
-            a_book = item["user_odds"].get("away_ml", a_fair)
-            a_edge_data = calculate_edge(a_prob, a_book)
+            a_user_book = item["user_odds"].get("away_ml")
+            h_user_book = item["user_odds"].get("home_ml")
 
-            a_edge = f"{a_edge_data['edge_pct']:+.1f}%" if a_edge_data['edge_pct'] is not None else "-"
-            a_ev = f"{a_edge_data['ev_pct']:+.1f}%" if a_edge_data['ev_pct'] is not None else "-"
+            if a_user_book:
+                a_edge_data = calculate_edge(a_prob, a_user_book, h_user_book)
+                a_book_disp = str(a_user_book)
+                a_edge = f"{a_edge_data['edge_pct']:+.1f}%" if a_edge_data['edge_pct'] is not None else "-"
+                a_ev = f"{a_edge_data['ev_pct']:+.1f}%" if a_edge_data['ev_pct'] is not None else "-"
+                a_rec = a_edge_data["recommendation"]
+            else:
+                a_book_disp = "-"
+                a_edge = "-"
+                a_ev = "-"
+                a_rec = "No Line"
+
             a_tag = "even_row" if idx % 2 == 0 else "odd_row"
 
             self.tree_moneylines.insert(
@@ -1514,11 +1547,11 @@ class MLBPredictorApp(tk.Tk):
                     away.get("starter", {}).get("name", "TBD"),
                     f"{round(a_prob * 100, 1)}%",
                     a_fair,
-                    a_book,
+                    a_book_disp,
                     a_edge,
                     a_ev,
                     conf,
-                    a_edge_data["recommendation"],
+                    a_rec,
                 ),
                 tags=(a_tag,),
             )
@@ -1526,11 +1559,18 @@ class MLBPredictorApp(tk.Tk):
             # Home Row
             h_prob = s.get("home_win_prob", 0.50)
             h_fair = s.get("home_fair_odds", "-110")
-            h_book = item["user_odds"].get("home_ml", h_fair)
-            h_edge_data = calculate_edge(h_prob, h_book)
 
-            h_edge = f"{h_edge_data['edge_pct']:+.1f}%" if h_edge_data['edge_pct'] is not None else "-"
-            h_ev = f"{h_edge_data['ev_pct']:+.1f}%" if h_edge_data['ev_pct'] is not None else "-"
+            if h_user_book:
+                h_edge_data = calculate_edge(h_prob, h_user_book, a_user_book)
+                h_book_disp = str(h_user_book)
+                h_edge = f"{h_edge_data['edge_pct']:+.1f}%" if h_edge_data['edge_pct'] is not None else "-"
+                h_ev = f"{h_edge_data['ev_pct']:+.1f}%" if h_edge_data['ev_pct'] is not None else "-"
+                h_rec = h_edge_data["recommendation"]
+            else:
+                h_book_disp = "-"
+                h_edge = "-"
+                h_ev = "-"
+                h_rec = "No Line"
 
             self.tree_moneylines.insert(
                 "",
@@ -1543,11 +1583,11 @@ class MLBPredictorApp(tk.Tk):
                     home.get("starter", {}).get("name", "TBD"),
                     f"{round(h_prob * 100, 1)}%",
                     h_fair,
-                    h_book,
+                    h_book_disp,
                     h_edge,
                     h_ev,
                     conf,
-                    h_edge_data["recommendation"],
+                    h_rec,
                 ),
                 tags=(a_tag,),
             )
@@ -1568,8 +1608,18 @@ class MLBPredictorApp(tk.Tk):
             a_cover = s.get("away_cover_plus_1_5", 0.50)
             a_delta = s.get("spread_delta_away", 0.0)
             a_fair = prob_to_american(a_cover)
-            a_book = item["user_odds"].get("away_rl_plus", a_fair)
-            a_edge = calculate_edge(a_cover, a_book)
+            a_user_book = item["user_odds"].get("away_rl_plus")
+            h_user_book = item["user_odds"].get("home_rl_minus")
+
+            if a_user_book:
+                a_edge = calculate_edge(a_cover, a_user_book, h_user_book)
+                a_book_disp = str(a_user_book)
+                a_edge_str = f"{a_edge['edge_pct']:+.1f}%" if a_edge['edge_pct'] is not None else "-"
+                a_rec = a_edge["recommendation"]
+            else:
+                a_book_disp = "-"
+                a_edge_str = "-"
+                a_rec = "No Line"
 
             self.tree_runlines.insert(
                 "",
@@ -1582,9 +1632,9 @@ class MLBPredictorApp(tk.Tk):
                     f"{round(a_cover * 100, 1)}%",
                     f"{round(s.get('away_win_prob', 0.50) * 100, 1)}%",
                     f"{round(a_delta * 100, 1):+.1f}%",
-                    a_book,
-                    f"{a_edge['edge_pct']:+.1f}%" if a_edge['edge_pct'] is not None else "-",
-                    a_edge["recommendation"],
+                    a_book_disp,
+                    a_edge_str,
+                    a_rec,
                 ),
             )
 
@@ -1592,8 +1642,16 @@ class MLBPredictorApp(tk.Tk):
             h_cover = s.get("home_cover_minus_1_5", 0.50)
             h_delta = round(h_cover - s.get("home_win_prob", 0.50), 4)
             h_fair = prob_to_american(h_cover)
-            h_book = item["user_odds"].get("home_rl_minus", h_fair)
-            h_edge = calculate_edge(h_cover, h_book)
+
+            if h_user_book:
+                h_edge = calculate_edge(h_cover, h_user_book, a_user_book)
+                h_book_disp = str(h_user_book)
+                h_edge_str = f"{h_edge['edge_pct']:+.1f}%" if h_edge['edge_pct'] is not None else "-"
+                h_rec = h_edge["recommendation"]
+            else:
+                h_book_disp = "-"
+                h_edge_str = "-"
+                h_rec = "No Line"
 
             self.tree_runlines.insert(
                 "",
@@ -1606,9 +1664,9 @@ class MLBPredictorApp(tk.Tk):
                     f"{round(h_cover * 100, 1)}%",
                     f"{round(s.get('home_win_prob', 0.50) * 100, 1)}%",
                     f"{round(h_delta * 100, 1):+.1f}%",
-                    h_book,
-                    f"{h_edge['edge_pct']:+.1f}%" if h_edge['edge_pct'] is not None else "-",
-                    h_edge["recommendation"],
+                    h_book_disp,
+                    h_edge_str,
+                    h_rec,
                 ),
             )
 
@@ -1681,15 +1739,25 @@ class MLBPredictorApp(tk.Tk):
             # Odds & Edge
             o_prob = p.get("over_prob", 0.50)
             u_prob = p.get("under_prob", 0.50)
-            fair_o = prob_to_american(o_prob)
-            fair_u = prob_to_american(u_prob)
-            book_o = p.get("user_book_over", fair_o)
-            book_u = p.get("user_book_under", fair_u)
+            book_o = p.get("user_book_over")
+            book_u = p.get("user_book_under")
 
-            edge_o = calculate_edge(o_prob, book_o)
-            edge_u = calculate_edge(u_prob, book_u)
+            edge_o = calculate_edge(o_prob, book_o, book_u) if book_o else None
+            edge_u = calculate_edge(u_prob, book_u, book_o) if book_u else None
 
-            rec = edge_o["recommendation"] if (edge_o["edge_pct"] or 0) >= (edge_u["edge_pct"] or 0) else edge_u["recommendation"]
+            disp_book_o = str(book_o) if book_o else "-"
+            disp_book_u = str(book_u) if book_u else "-"
+            disp_edge_o = f"{edge_o['edge_pct']:+.1f}%" if (edge_o and edge_o['edge_pct'] is not None) else "-"
+            disp_edge_u = f"{edge_u['edge_pct']:+.1f}%" if (edge_u and edge_u['edge_pct'] is not None) else "-"
+
+            if edge_o and edge_u:
+                rec = edge_o["recommendation"] if (edge_o["edge_pct"] or 0) >= (edge_u["edge_pct"] or 0) else edge_u["recommendation"]
+            elif edge_o:
+                rec = edge_o["recommendation"]
+            elif edge_u:
+                rec = edge_u["recommendation"]
+            else:
+                rec = "No Line"
 
             self.tree_props.insert(
                 "",
@@ -1702,10 +1770,10 @@ class MLBPredictorApp(tk.Tk):
                     p.get("line", "1.5"),
                     f"{round(o_prob * 100, 1)}%",
                     f"{round(u_prob * 100, 1)}%",
-                    book_o,
-                    book_u,
-                    f"{edge_o['edge_pct']:+.1f}%" if edge_o['edge_pct'] is not None else "-",
-                    f"{edge_u['edge_pct']:+.1f}%" if edge_u['edge_pct'] is not None else "-",
+                    disp_book_o,
+                    disp_book_u,
+                    disp_edge_o,
+                    disp_edge_u,
                     rec,
                 ),
             )
@@ -1728,8 +1796,21 @@ class MLBPredictorApp(tk.Tk):
             fair_nrfi = s.get("nrfi_fair_odds", "-110")
             fair_yrfi = s.get("yrfi_fair_odds", "-110")
 
-            book_nrfi = item["user_odds"].get("nrfi", fair_nrfi)
-            edge_nrfi = calculate_edge(p_nrfi, book_nrfi)
+            away_1st_val = away.get("starter", {}).get("first_inning_era")
+            home_1st_val = home.get("starter", {}).get("first_inning_era")
+            away_1st_str = f"{away_1st_val:.2f}" if away_1st_val is not None else "Fallback (LOW)"
+            home_1st_str = f"{home_1st_val:.2f}" if home_1st_val is not None else "Fallback (LOW)"
+
+            user_book_nrfi = item["user_odds"].get("nrfi")
+            if user_book_nrfi:
+                edge_nrfi = calculate_edge(p_nrfi, user_book_nrfi)
+                disp_book_nrfi = str(user_book_nrfi)
+                disp_edge_nrfi = f"{edge_nrfi['edge_pct']:+.1f}%" if edge_nrfi['edge_pct'] is not None else "-"
+                rec_nrfi = edge_nrfi["recommendation"]
+            else:
+                disp_book_nrfi = "-"
+                disp_edge_nrfi = "-"
+                rec_nrfi = "No Line"
 
             self.tree_nrfi.insert(
                 "",
@@ -1738,15 +1819,15 @@ class MLBPredictorApp(tk.Tk):
                 values=(
                     matchup,
                     f"{venue.get('name', 'Ballpark')} ({venue.get('roof_type', 'Open')})",
-                    away.get("starter", {}).get("first_inning_era", "-"),
-                    home.get("starter", {}).get("first_inning_era", "-"),
+                    away_1st_str,
+                    home_1st_str,
                     f"{round(p_nrfi * 100, 1)}%",
                     f"{round(p_yrfi * 100, 1)}%",
                     fair_nrfi,
                     fair_yrfi,
-                    book_nrfi,
-                    f"{edge_nrfi['edge_pct']:+.1f}%" if edge_nrfi['edge_pct'] is not None else "-",
-                    edge_nrfi["recommendation"],
+                    disp_book_nrfi,
+                    disp_edge_nrfi,
+                    rec_nrfi,
                 ),
             )
 
@@ -1765,11 +1846,23 @@ class MLBPredictorApp(tk.Tk):
             # Away ML Pick
             a_prob = s.get("away_win_prob", 0.50)
             a_fair = s.get("away_fair_odds", "-110")
-            a_book = item["user_odds"].get("away_ml", a_fair)
-            a_edge = calculate_edge(a_prob, a_book)
-            a_edge_pct = a_edge["edge_pct"] or 0.0
-            if "away_ml" not in item["user_odds"] and abs(a_edge_pct) < 0.1:
-                a_edge_pct = 0.0
+            a_user_book = item["user_odds"].get("away_ml")
+            h_user_book = item["user_odds"].get("home_ml")
+            if a_user_book:
+                a_edge = calculate_edge(a_prob, a_user_book, h_user_book)
+                a_edge_pct = a_edge["edge_pct"]
+                a_ev_pct = a_edge["ev_pct"]
+                a_book_str = str(a_user_book)
+                is_value = bool(a_edge_pct is not None and a_edge_pct >= 1.0)
+                tier = "VALUE BET" if is_value else "LEAN"
+                rationale = f"Market Edge ({a_edge_pct:+.1f}%) | EV: {a_ev_pct:+.1f}% | {conf} Conf"
+            else:
+                a_edge_pct = None
+                a_ev_pct = None
+                a_book_str = "-"
+                is_value = False
+                tier = "FUNDAMENTAL PICK"
+                rationale = f"Fundamental Model Pick ({round(a_prob * 100, 1)}%) | {conf} Conf"
 
             self.active_picks.append({
                 "game_pk": pk,
@@ -1778,22 +1871,34 @@ class MLBPredictorApp(tk.Tk):
                 "selection": f"{away.get('abbrev', 'AWAY')} ML",
                 "model_prob": a_prob,
                 "fair_odds": a_fair,
-                "book_odds": a_book,
+                "book_odds": a_book_str,
                 "edge_pct": a_edge_pct,
-                "ev_pct": a_edge["ev_pct"] or 0.0,
+                "ev_pct": a_ev_pct,
                 "confidence": conf,
                 "spread_delta": s.get("spread_delta_away", 0.0),
-                "rationale": f"Away ML Model Pick ({round(a_prob * 100, 1)}%) | {conf} Conf" if a_edge_pct == 0.0 else f"Away ML Edge ({a_edge_pct:+.1f}%) | {conf} Conf",
+                "is_value": is_value,
+                "tier": tier,
+                "rationale": rationale,
             })
 
             # Home ML Pick
             h_prob = s.get("home_win_prob", 0.50)
             h_fair = s.get("home_fair_odds", "-110")
-            h_book = item["user_odds"].get("home_ml", h_fair)
-            h_edge = calculate_edge(h_prob, h_book)
-            h_edge_pct = h_edge["edge_pct"] or 0.0
-            if "home_ml" not in item["user_odds"] and abs(h_edge_pct) < 0.1:
-                h_edge_pct = 0.0
+            if h_user_book:
+                h_edge = calculate_edge(h_prob, h_user_book, a_user_book)
+                h_edge_pct = h_edge["edge_pct"]
+                h_ev_pct = h_edge["ev_pct"]
+                h_book_str = str(h_user_book)
+                is_value = bool(h_edge_pct is not None and h_edge_pct >= 1.0)
+                tier = "VALUE BET" if is_value else "LEAN"
+                rationale = f"Market Edge ({h_edge_pct:+.1f}%) | EV: {h_ev_pct:+.1f}% | {conf} Conf"
+            else:
+                h_edge_pct = None
+                h_ev_pct = None
+                h_book_str = "-"
+                is_value = False
+                tier = "FUNDAMENTAL PICK"
+                rationale = f"Fundamental Model Pick ({round(h_prob * 100, 1)}%) | {conf} Conf"
 
             self.active_picks.append({
                 "game_pk": pk,
@@ -1802,22 +1907,35 @@ class MLBPredictorApp(tk.Tk):
                 "selection": f"{home.get('abbrev', 'HOME')} ML",
                 "model_prob": h_prob,
                 "fair_odds": h_fair,
-                "book_odds": h_book,
+                "book_odds": h_book_str,
                 "edge_pct": h_edge_pct,
-                "ev_pct": h_edge["ev_pct"] or 0.0,
+                "ev_pct": h_ev_pct,
                 "confidence": conf,
                 "spread_delta": s.get("spread_delta_home", 0.0),
-                "rationale": f"Home ML Model Pick ({round(h_prob * 100, 1)}%) | {conf} Conf" if h_edge_pct == 0.0 else f"Home ML Edge ({h_edge_pct:+.1f}%) | {conf} Conf",
+                "is_value": is_value,
+                "tier": tier,
+                "rationale": rationale,
             })
 
             # NRFI Pick
             p_nrfi = s.get("p_nrfi", 0.50)
             fair_nrfi = s.get("nrfi_fair_odds", "-110")
-            book_nrfi = item["user_odds"].get("nrfi", fair_nrfi)
-            edge_nrfi = calculate_edge(p_nrfi, book_nrfi)
-            nrfi_edge_pct = edge_nrfi["edge_pct"] or 0.0
-            if "nrfi" not in item["user_odds"] and abs(nrfi_edge_pct) < 0.1:
-                nrfi_edge_pct = 0.0
+            user_nrfi = item["user_odds"].get("nrfi")
+            if user_nrfi:
+                edge_nrfi = calculate_edge(p_nrfi, user_nrfi)
+                nrfi_edge_pct = edge_nrfi["edge_pct"]
+                nrfi_ev_pct = edge_nrfi["ev_pct"]
+                nrfi_book_str = str(user_nrfi)
+                is_value = bool(nrfi_edge_pct is not None and nrfi_edge_pct >= 1.0)
+                tier = "VALUE BET" if is_value else "LEAN"
+                rationale = f"NRFI Edge ({nrfi_edge_pct:+.1f}%) | EV: {nrfi_ev_pct:+.1f}% | {conf} Conf"
+            else:
+                nrfi_edge_pct = None
+                nrfi_ev_pct = None
+                nrfi_book_str = "-"
+                is_value = False
+                tier = "FUNDAMENTAL PICK"
+                rationale = f"NRFI 1st Inning Suppression ({round(p_nrfi * 100, 1)}%) | {conf} Conf"
 
             self.active_picks.append({
                 "game_pk": pk,
@@ -1826,16 +1944,25 @@ class MLBPredictorApp(tk.Tk):
                 "selection": f"{matchup} NRFI",
                 "model_prob": p_nrfi,
                 "fair_odds": fair_nrfi,
-                "book_odds": book_nrfi,
+                "book_odds": nrfi_book_str,
                 "edge_pct": nrfi_edge_pct,
-                "ev_pct": edge_nrfi["ev_pct"] or 0.0,
+                "ev_pct": nrfi_ev_pct,
                 "confidence": conf,
                 "spread_delta": 0.0,
-                "rationale": f"NRFI 1st Inning Suppression ({round(p_nrfi * 100, 1)}%)",
+                "is_value": is_value,
+                "tier": tier,
+                "rationale": rationale,
             })
 
-        # Sort by edge % descending
-        self.active_picks.sort(key=lambda x: float(x.get("edge_pct", 0.0)), reverse=True)
+        # Sort: Value bets first (highest edge_pct), then fundamental picks by model_prob descending
+        self.active_picks.sort(
+            key=lambda x: (
+                1 if x.get("is_value") else 0,
+                float(x.get("edge_pct") if x.get("edge_pct") is not None else 0.0),
+                float(x.get("model_prob", 0.0)),
+            ),
+            reverse=True,
+        )
         self.apply_picks_filters()
 
     def apply_picks_filters(self) -> None:
@@ -1849,22 +1976,30 @@ class MLBPredictorApp(tk.Tk):
         self.lbl_e_val.configure(text=f"{min_e:+.1f}%")
 
         rank = 1
-        value_bets_count = 0
+        value_bets_count = sum(1 for p in self.active_picks if p.get("is_value"))
 
         for p in self.active_picks:
             prob_pct = p["model_prob"] * 100.0
-            edge = float(p["edge_pct"])
+            edge_val = p["edge_pct"]
+            ev_val = p["ev_pct"]
             conf = p["confidence"]
-
-            if edge >= 2.0:
-                value_bets_count += 1
 
             if prob_pct < min_p:
                 continue
-            if edge < min_e:
-                continue
+
+            # If slider requires edge > 0, filter out picks without edge
+            if min_e > 0.0:
+                if edge_val is None or edge_val < min_e:
+                    continue
+            else:
+                if edge_val is not None and edge_val < min_e:
+                    continue
+
             if conf_filter != "All" and conf != conf_filter:
                 continue
+
+            edge_disp = f"{edge_val:+.1f}%" if edge_val is not None else "-"
+            ev_disp = f"{ev_val:+.1f}%" if ev_val is not None else "-"
 
             self.tree_picks.insert(
                 "",
@@ -1878,8 +2013,8 @@ class MLBPredictorApp(tk.Tk):
                     f"{round(prob_pct, 1)}%",
                     p["fair_odds"],
                     p["book_odds"],
-                    f"{edge:+.1f}%",
-                    f"{p['ev_pct']:+.1f}%",
+                    edge_disp,
+                    ev_disp,
                     conf,
                     p["rationale"],
                 ),
@@ -2176,9 +2311,9 @@ class MLBPredictorApp(tk.Tk):
             self.bt_record_var.set("0-0 (0.0%)")
             self.bt_units_var.set("+0.00u")
             self.bt_roi_var.set("0.0%")
-            self.bt_brier_var.set("0.0000")
-            self.bt_logloss_var.set("0.0000")
-            self.bt_clv_var.set("+0.0% CLV")
+            self.bt_brier_var.set("N/A")
+            self.bt_logloss_var.set("N/A")
+            self.bt_clv_var.set("N/A")
             self.status_var.set("Backtest: No settled picks found in database.")
             return
 
@@ -2195,9 +2330,31 @@ class MLBPredictorApp(tk.Tk):
         self.bt_record_var.set(f"{wins}-{losses} ({win_pct:.1f}%)")
         self.bt_units_var.set(f"{units:+.2f}u")
         self.bt_roi_var.set(f"{roi_pct:+.1f}%")
-        self.bt_brier_var.set(f"{cal_metrics.get('brier_score', 0.0):.4f}")
-        self.bt_logloss_var.set(f"{cal_metrics.get('log_loss', 0.0):.4f}")
-        self.bt_clv_var.set("+2.4% CLV")
+
+        brier = cal_metrics.get("brier_score")
+        log_loss = cal_metrics.get("log_loss")
+        self.bt_brier_var.set(f"{brier:.4f}" if brier is not None else "N/A")
+        self.bt_logloss_var.set(f"{log_loss:.4f}" if log_loss is not None else "N/A")
+
+        # Compute CLV if closing_odds exist
+        clv_diffs: list[float] = []
+        for p in settled:
+            m_odds = p.get("market_odds")
+            c_odds = p.get("closing_odds")
+            if m_odds and c_odds and str(m_odds) != str(c_odds):
+                try:
+                    p_bet = american_to_prob(m_odds)
+                    p_close = american_to_prob(c_odds)
+                    if p_bet > 0:
+                        clv_diffs.append((p_close - p_bet) / p_bet * 100.0)
+                except Exception:
+                    pass
+        if clv_diffs:
+            avg_clv = float(np.mean(clv_diffs))
+            self.bt_clv_var.set(f"{avg_clv:+.1f}% CLV")
+        else:
+            self.bt_clv_var.set("N/A")
+
         self.status_var.set(f"Backtest completed on {total} bets. Units: {units:+.2f}u (ROI: {roi_pct:+.1f}%)")
 
     # =========================================================================
@@ -2222,11 +2379,15 @@ class MLBPredictorApp(tk.Tk):
                     b.get("count", 0),
                     f"{b.get('avg_predicted_prob', 0.0) * 100:.1f}%",
                     f"{b.get('actual_win_pct', 0.0) * 100:.1f}%",
-                    b.get("status", "Well Calibrated"),
+                    b.get("status", "Insufficient Data"),
                 ),
             )
 
-        status_text = f"Status: {cal_res.get('status', 'Well Calibrated')} | Brier: {cal_res.get('brier_score', 0.0):.4f} | Log Loss: {cal_res.get('log_loss', 0.0):.4f}"
+        brier = cal_res.get("brier_score")
+        log_loss = cal_res.get("log_loss")
+        brier_str = f"{brier:.4f}" if brier is not None else "N/A"
+        logloss_str = f"{log_loss:.4f}" if log_loss is not None else "N/A"
+        status_text = f"Status: {cal_res.get('status', 'Insufficient Data')} | Brier: {brier_str} | Log Loss: {logloss_str}"
         self.cal_status_var.set(status_text)
 
         # Draw Matplotlib Curves
@@ -2248,7 +2409,16 @@ class MLBPredictorApp(tk.Tk):
         if x_pts:
             self.ax_rel.plot(x_pts, y_pts, "o-", color=t["green"], linewidth=2, markersize=6, label="Model Empirical")
         else:
-            self.ax_rel.plot([0.55, 0.65, 0.75], [0.54, 0.66, 0.74], "o-", color=t["green"], linewidth=2, label="Sample Calibrated")
+            self.ax_rel.text(
+                0.75,
+                0.65,
+                "No graded picks yet.\nLog and settle picks to view\nempirical reliability curve.",
+                color=t["text_muted"],
+                fontsize=8,
+                ha="center",
+                va="center",
+                style="italic",
+            )
 
         self.ax_rel.set_title("Reliability Curve", color=t["text_main"], fontsize=10, fontweight="bold")
         self.ax_rel.set_xlabel("Predicted Probability", color=t["text_muted"], fontsize=8)
@@ -2268,19 +2438,28 @@ class MLBPredictorApp(tk.Tk):
                 cur += u
                 cum_units.append(cur)
             x_steps = list(range(1, len(cum_units) + 1))
+            self.ax_bank.axhline(0, color=t["red"], linestyle="--", alpha=0.6)
+            self.ax_bank.plot(x_steps, cum_units, color=t["cyan"], linewidth=2, label="Bankroll Units")
+            self.ax_bank.fill_between(x_steps, cum_units, 0, color=t["cyan"], alpha=0.15)
+            self.ax_bank.legend(facecolor=t["bg_card"], edgecolor=t["border"], labelcolor=t["text_main"], fontsize=7)
         else:
-            x_steps = [0, 1, 2, 3, 4, 5]
-            cum_units = [0.0, 0.8, 1.5, 0.5, 1.8, 2.7]
-
-        self.ax_bank.axhline(0, color=t["red"], linestyle="--", alpha=0.6)
-        self.ax_bank.plot(x_steps, cum_units, color=t["cyan"], linewidth=2, label="Bankroll Units")
-        self.ax_bank.fill_between(x_steps, cum_units, 0, color=t["cyan"], alpha=0.15)
+            self.ax_bank.axhline(0, color=t["border"], linestyle="--", alpha=0.4)
+            self.ax_bank.text(
+                0.5,
+                0.5,
+                "No graded picks yet.\nTrack settled wagers to view\ncumulative unit growth.",
+                color=t["text_muted"],
+                fontsize=8,
+                ha="center",
+                va="center",
+                style="italic",
+                transform=self.ax_bank.transAxes,
+            )
 
         self.ax_bank.set_title("Cumulative Bankroll Units", color=t["text_main"], fontsize=10, fontweight="bold")
         self.ax_bank.set_xlabel("Settled Bets Count", color=t["text_muted"], fontsize=8)
         self.ax_bank.set_ylabel("Cumulative Units", color=t["text_muted"], fontsize=8)
         self.ax_bank.tick_params(colors=t["text_muted"], labelsize=8)
         self.ax_bank.grid(True, color=t["border"], linestyle=":", alpha=0.5)
-        self.ax_bank.legend(facecolor=t["bg_card"], edgecolor=t["border"], labelcolor=t["text_main"], fontsize=7)
 
         self.fig_canvas.draw()

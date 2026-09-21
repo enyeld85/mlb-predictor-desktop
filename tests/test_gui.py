@@ -288,3 +288,56 @@ def test_log_selected_pick_action(gui_app, sample_game_data):
     cursor.execute("SELECT COUNT(*) FROM picks_history")
     count_after = cursor.fetchone()[0]
     assert count_after == count_before + 1
+
+
+def test_unedited_book_odds_display_no_line(gui_app, sample_game_data):
+    """Verify that unedited lines display '-' for Book Odds and Edge, and 'No Line' for Recommendation."""
+    gui_app.load_games([sample_game_data], date_str="2026-09-20")
+    gui_app.update_idletasks()
+
+    # Tab 2: Moneylines
+    ml_items = gui_app.tree_moneylines.get_children()
+    assert len(ml_items) >= 2
+    row1 = gui_app.tree_moneylines.item(ml_items[0])["values"]
+    col_names = list(gui_app.tree_moneylines["columns"])
+    odds_col = col_names.index("book_odds")
+    edge_col = col_names.index("edge_pct")
+    rec_col = col_names.index("recommendation")
+
+    assert row1[odds_col] == "-"
+    assert row1[edge_col] == "-"
+    assert row1[rec_col] == "No Line"
+
+    # Tab 6: Model Picks displays FUNDAMENTAL PICK for high prob without market odds
+    pick_items = gui_app.tree_picks.get_children()
+    assert len(pick_items) > 0
+    pick_row = gui_app.tree_picks.item(pick_items[0])["values"]
+    pick_cols = list(gui_app.tree_picks["columns"])
+    rationale_col = pick_cols.index("rationale")
+    odds_pick_col = pick_cols.index("book_odds")
+    assert "Fundamental Model Pick" in str(pick_row[rationale_col])
+    assert str(pick_row[odds_pick_col]) == "-"
+
+
+def test_calibration_tab_zero_state(gui_app):
+    """Verify Tab 8 calibration display when 0 settled picks exist in database."""
+    # Ensure database has 0 picks
+    gui_app.conn.execute("DELETE FROM picks_history")
+    gui_app.conn.commit()
+
+    gui_app.refresh_calibration_tab()
+    gui_app.update_idletasks()
+
+    # Overall status label must show Insufficient Data and N/A
+    label_text = gui_app.cal_status_var.get()
+    assert "Insufficient Data" in label_text
+    assert "Brier: N/A" in label_text
+    assert "Log Loss: N/A" in label_text
+
+    # Buckets table
+    cal_items = gui_app.tree_calibration.get_children()
+    assert len(cal_items) == 7
+    for item in cal_items:
+        row = gui_app.tree_calibration.item(item)["values"]
+        assert row[1] == 0  # Sample count
+        assert row[4] == "Insufficient Data"  # Status

@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime, timezone, timedelta
 import pytest
 from database import (
     init_db,
@@ -419,6 +420,42 @@ def test_empty_and_fallback_helpers(temp_db_path):
     assert slate is not None
     assert len(slate) == 1
     assert slate[0]["away_team"] == "Team A"
+
+    conn.close()
+
+
+def test_pitcher_ttl_freshness(temp_db_path):
+    """Verify get_pitcher respects max_age_hours and expires stale pitcher records."""
+    conn = init_db(temp_db_path)
+    # Save a fresh pitcher (now)
+    pitcher_data = {
+        "pitcher_id": 12345,
+        "name": "Fresh Pitcher",
+        "era": 3.50,
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+    }
+    save_pitcher(conn, pitcher_data)
+    fresh = get_pitcher(conn, 12345, max_age_hours=12.0)
+    assert fresh is not None
+    assert fresh["name"] == "Fresh Pitcher"
+
+    # Save a stale pitcher (15 hours ago)
+    stale_time = (datetime.now(timezone.utc) - timedelta(hours=15)).isoformat()
+    stale_pitcher = {
+        "pitcher_id": 67890,
+        "name": "Stale Pitcher",
+        "era": 4.20,
+        "last_updated": stale_time,
+    }
+    save_pitcher(conn, stale_pitcher)
+    # With 12h TTL, should return None
+    stale_res = get_pitcher(conn, 67890, max_age_hours=12.0)
+    assert stale_res is None
+
+    # Without TTL check (max_age_hours=None), should return record
+    unrestricted = get_pitcher(conn, 67890, max_age_hours=None)
+    assert unrestricted is not None
+    assert unrestricted["name"] == "Stale Pitcher"
 
     conn.close()
 
